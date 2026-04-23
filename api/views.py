@@ -1,10 +1,14 @@
-from rest_framework.generics import CreateAPIView, RetrieveDestroyAPIView, ListAPIView, ListCreateAPIView
+import re
+
+from rest_framework.generics import CreateAPIView, RetrieveDestroyAPIView, ListAPIView, ListCreateAPIView, ValidationError
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 import requests
 from datetime import datetime, timezone
 from uuid6 import uuid7
 from decouple import config
+from rest_framework.pagination import PageNumberPagination
 
 from .serializers import PersonSerializer
 from .models import Person
@@ -14,10 +18,26 @@ GENDERIZE_API_URL = config("GENDERIZE_API_URL")
 AGIFY_API_URL = config("AGIFY_API_URL")
 NATIONALIZE_API_URL = config("NATIONALIZE_API_URL")
 
+class Pagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'limit'
+    max_page_size = 50
+
+    def get_paginated_response(self, data):
+        return Response({
+            "status": "success",
+            "page": self.page.number,
+            "limit": self.get_page_size(self.request),
+            "total": self.page.paginator.count,
+            # "next": self.get_next_link(),
+            # "previous": self.get_previous_link(),
+            "data": data
+        })
 
 class PersonPredictionView(ListCreateAPIView):
     serializer_class = PersonSerializer
     queryset = Person.objects.all()
+    pagination_class = Pagination
 
     def create(self, request, *args, **kwargs):
         name = request.data.get("name")
@@ -67,7 +87,6 @@ class PersonPredictionView(ListCreateAPIView):
 
                 "gender": gender_res.get("gender"),
                 "gender_probability": gender_res.get("probability"),
-                "sample_size": gender_res.get("count"),
 
                 "age": age_res.get("age"),
                 "age_group": self.get_age_group(age_res.get("age")),
@@ -106,42 +125,96 @@ class PersonPredictionView(ListCreateAPIView):
     def get_queryset(self):
         queryset = Person.objects.all()
 
-        gender = self.request.query_params.get("gender")
-        country = self.request.query_params.get("country_id")
-        age_group = self.request.query_params.get("age_group")
+        params = self.request.query_params
 
-        if gender:
-            queryset = queryset.filter(gender__iexact=gender)
+        min_age = params.get("min_age")
+        max_age = params.get("max_age")
+        min_gender_probability = params.get("min_gender_probability")
+        min_country_probability = params.get("min_country_probability")
 
-        if country:
-            queryset = queryset.filter(country_id__iexact=country)
+        try:
 
-        if age_group:
-            queryset = queryset.filter(age_group__iexact=age_group)
+            if params.get("gender"):
+                queryset = queryset.filter(gender__iexact=params.get("gender"))
 
-        return queryset
+            if params.get("age_group"):
+                queryset = queryset.filter(age_group__iexact=params.get("age_group"))
+
+            if params.get("country_id"):
+                queryset = queryset.filter(country_id__iexact=params.get("country_id"))
+
+            if min_age:
+                queryset = queryset.filter(age__gte=int(min_age))
+
+            if max_age:
+                queryset = queryset.filter(age__lte=int(max_age))
+
+            if min_gender_probability:
+                queryset = queryset.filter(gender_probability__gte=float(min_gender_probability))
+
+            if min_country_probability:
+                queryset = queryset.filter(country_probability__gte=float(min_country_probability))
+
+            sort_by = params.get("sort_by", "created_at")
+            order = params.get("order", "asc")
+
+            if order not in ["asc", "desc"]:
+                raise ValidationError("Invalid query parameters")
+
+            allowed_sort = ["age", "created_at", "gender_probability"]
+
+            if sort_by not in allowed_sort:
+                raise ValidationError("Invalid query parameters")
+
+            if sort_by in allowed_sort:
+                if order == "desc":
+                    sort_by = f"-{sort_by}"
+                queryset = queryset.order_by(sort_by)
+
+            return queryset
+        except:
+            return Response({
+                "status": "error",
+                "message": "Invalid query parameters"
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     def list(self, request, *args, **kwargs):
+        params = request.query_params
+
+        try:
+            min_age = params.get("min_age")
+            if min_age and not min_age.isdigit():
+                raise ValueError
+
+            max_age = params.get("max_age")
+            if max_age and not max_age.isdigit():
+                raise ValueError
+
+            if params.get("min_gender_probability"):
+                gp = float(params.get("min_gender_probability"))
+                if not (0 <= gp <= 1):
+                    raise ValueError
+
+            if params.get("min_country_probability"):
+                cp = float(params.get("min_country_probability"))
+                if not (0 <= cp <= 1):
+                    raise ValueError
+
+        except:
+            return Response({
+                "status": "error",
+                "message": "Invalid query parameters"
+            }, status=422)
+
         queryset = self.filter_queryset(self.get_queryset())
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
         serializer = self.get_serializer(queryset, many=True)
-
-        simplified_data = [
-            {
-                "id": item["id"],
-                "name": item["name"],
-                "gender": item["gender"],
-                "age": item["age"],
-                "age_group": item["age_group"],
-                "country_id": item["country_id"],
-            }
-            for item in serializer.data
-        ]
-
-        return Response({
-            "status": "success",
-            "count": len(simplified_data),
-            "data": simplified_data
-        })
+        return Response(serializer.data)
     
 class PersonPredictionDetailView(RetrieveDestroyAPIView):
     queryset = Person.objects.all()
@@ -161,3 +234,85 @@ class PersonPredictionDetailView(RetrieveDestroyAPIView):
         instance = self.get_object()
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+class ProfileSearchView(ListAPIView):
+    serializer_class = PersonSerializer
+    pagination_class = Pagination
+
+    def get_queryset(self):
+        q = self.request.query_params.get("q", "").lower()
+
+        self.interpreted = False
+
+        if not q:
+            return Person.objects.none()
+
+        qs = Person.objects.all()
+
+        if "male" in q and "female" in q:
+            self.interpreted = True
+        elif re.search(r"\bmale\b", q):
+            qs = qs.filter(gender="male")
+            self.interpreted = True
+        elif re.search(r"\bfemale\b", q):
+            qs = qs.filter(gender="female")
+            self.interpreted = True
+
+        if "teen" in q:
+            qs = qs.filter(age_group="teenager")
+            self.interpreted = True
+        elif "adult" in q:
+            qs = qs.filter(age_group="adult")
+            self.interpreted = True
+        elif "child" in q:
+            qs = qs.filter(age_group="child")
+            self.interpreted = True
+        elif "senior" in q:
+            qs = qs.filter(age_group="senior")
+            self.interpreted = True
+
+        if "young" in q:
+            qs = qs.filter(age__gte=16, age__lte=24)
+            self.interpreted = True
+
+        match = re.search(r"above (\d+)", q)
+        if match:
+            qs = qs.filter(age__gte=int(match.group(1)))
+            self.interpreted = True
+
+        match = re.search(r"below (\d+)", q)
+        if match:
+            qs = qs.filter(age__lte=int(match.group(1)))
+            self.interpreted = True
+
+        COUNTRY_MAP = {
+            "nigeria": "NG",
+            "kenya": "KE",
+            "angola": "AO",
+        }
+
+        for name, code in COUNTRY_MAP.items():
+            if name in q:
+                qs = qs.filter(country_id=code)
+                self.interpreted = True
+
+        return qs
+    
+    def list(self, request, *args, **kwargs):
+        q = request.query_params.get("q", "").lower()
+
+        if not q:
+            return Response({
+                "status": "error",
+                "message": "Missing query parameter 'q'"
+            }, status=400)
+
+        queryset = self.get_queryset()
+
+        if not getattr(self, "interpreted", False):
+            return Response({
+                "status": "error",
+                "message": "Unable to interpret query"
+            }, status=400)
+
+        return super().list(request, *args, **kwargs)
