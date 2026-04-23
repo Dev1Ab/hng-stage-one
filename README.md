@@ -16,118 +16,7 @@ A backend system built for **Insighta Labs** that provides advanced filtering, s
 
 ---
 
-# Tech Stack
-
-- Python (Django + Django REST Framework)
-- PostgreSQL
-
----
-
-# API ENDPOINTS
-
----
-
-## 1. Create / Get Profile
-
-### `POST /api/profiles`
-
-Creates a new profile using external APIs or returns existing profile if name exists.
-
-### Request Body:
-```json
-{
-  "name": "emmanuel"
-}
-```
-
-Response (Success):
-```json
-{
-  "status": "success",
-  "data": {
-    "id": "uuid-v7",
-    "name": "emmanuel",
-    "gender": "male",
-    "gender_probability": 0.99,
-    "age": 34,
-    "age_group": "adult",
-    "country_id": "NG",
-    "country_probability": 0.85,
-    "created_at": "2026-04-01T12:00:00Z"
-  }
-}
-```
-
-
-## 2. Get All Profiles (Advanced Query Engine)
-
-### `GET /api/profiles`
-
-Supports filtering, sorting, and pagination.
-
----
-
-### Filters Supported
-
-| Parameter | Description |
-|----------|-------------|
-| gender | male / female |
-| age_group | child / teenager / adult / senior |
-| country_id | ISO country code |
-| min_age | minimum age |
-| max_age | maximum age |
-| min_gender_probability | float filter |
-| min_country_probability | float filter |
-
----
-
-### Sorting
-
-| Parameter | Values |
-|----------|--------|
-| sort_by | age, created_at, gender_probability |
-| order | asc, desc |
-
----
-
-### Pagination
-
-| Parameter | Default | Max |
-|----------|--------|-----|
-| page | 1 | - |
-| limit | 10 | 50 |
-
----
-
-### Example Request
-
-```http
-GET /api/profiles?gender=male&country_id=NG&min_age=25&sort_by=age&order=desc&page=1&limit=10
-```
-Response
-
-```json
-{
-  "status": "success",
-  "page": 1,
-  "limit": 10,
-  "total": 2026,
-  "data": [
-    {
-      "id": "uuid-v7",
-      "name": "emmanuel",
-      "gender": "male",
-      "gender_probability": 0.99,
-      "age": 34,
-      "age_group": "adult",
-      "country_id": "NG",
-      "country_probability": 0.85,
-      "created_at": "2026-04-01T12:00:00Z"
-    }
-  ]
-}
-```
-## 3. Natural Language Search
+## Natural Language Search
 
 `GET /api/profiles/search?q=`
 
@@ -186,44 +75,22 @@ Error Response
 ```
 
 ---
+## Natural Language Parsing Limitations
 
-## Natural Language Parsing Approach
+The parser is rule-based and has the following limitations:
 
-The system uses a rule-based keyword parser (no AI/ML models).
+### 1. Multi-intent queries
+Queries like "male and female teenagers above 17" require combining multiple filters. The system handles gender conflicts by not applying gender filters when both are present.
 
-### How it works:
-- Convert query to lowercase
-- Match keywords using:
-- Regex (for age rules: above / below)
-- Direct keyword mapping (male, female, country names)
-- Apply filters incrementally to Django QuerySet
-- If no rules match → return error
+### 2. Ambiguity in wording
+Words like "young" are strictly mapped to 16–24 age range and do not adapt based on context.
 
-Example
+### 3. Sequential parsing limitation
+Filters are applied independently and then combined, meaning complex sentence structures are not deeply parsed.
 
-Input:
+### 4. Country mapping limitation
+Only predefined countries are supported via a static dictionary.
 
-``"young males from nigeria"``
-
-Parsed into:
-
-gender = male
-age = 16–24
-country_id = NG
-
-### Limitations
-
-This system does NOT support:
-
-- Complex grammar queries (e.g. "not older than 40")
-- Range expressions (e.g. "between 20 and 30")
-- Synonyms not defined in keyword map
-- Spelling mistakes or fuzzy matching
-- Multi-country queries (e.g. "Nigeria and Kenya")
-- Advanced natural language understanding (no LLM used by design)
-### Country Mapping Limitation
-
-Country recognition is based on a predefined static dictionary:
 ```json
 COUNTRY_MAP = {
     "nigeria": "NG",
