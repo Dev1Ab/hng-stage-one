@@ -1,7 +1,7 @@
 from pathlib import Path
 from decouple import config, Csv
 import dj_database_url
-from datetime import timedelta
+
 
 APPEND_SLASH=False
 
@@ -14,7 +14,6 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
-    
 }
 
 SIMPLE_JWT = {
